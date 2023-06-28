@@ -14,14 +14,16 @@ import (
 )
 
 type Installer struct {
-	manifest        *Manifest
-	appCacheDir     string
-	filesInAppCache map[string]interface{}
-	versionLine     *map[string]string
+	manifest                 *Manifest
+	appCacheDir              string
+	filesInAppCache          map[string]interface{}
+	versionLine              *map[string]string
+	retryTimeLimit           time.Duration
+	retryTimeInitialInterval time.Duration
 }
 
 func NewInstaller(manifest *Manifest) *Installer {
-	return &Installer{manifest, "", make(map[string]interface{}), &map[string]string{}}
+	return &Installer{manifest, "", make(map[string]interface{}), &map[string]string{}, 1 * time.Minute, 1 * time.Second}
 }
 
 func (i *Installer) SetAppCacheDir(appCacheDir string) (err error) {
@@ -87,17 +89,17 @@ func (i *Installer) InstallDependency(dep Dependency, outputDir string) error {
 
 func (i *Installer) warnNewerPatch(dep Dependency) error {
 
-	if strings.Contains(dep.Version, "preview") {
-		i.manifest.log.Warning("You are using the preview version %s of %s", dep.Version, dep.Name)
-		return nil
-	}
-
-	versions := i.manifest.AllDependencyVersions(dep.Name)
-
 	v, err := semver.NewVersion(dep.Version)
 	if err != nil {
 		return nil
 	}
+
+	if v.Prerelease() != "" {
+		i.manifest.log.Warning("You are using the pre-release version %s of %s", dep.Version, dep.Name)
+		return nil
+	}
+
+	versions := i.manifest.AllDependencyVersions(dep.Name)
 
 	minor := fmt.Sprintf("%v", v.Minor())
 	versionLine := *i.GetVersionLine()
@@ -169,7 +171,7 @@ func (i *Installer) FetchDependency(dep Dependency, outputFile string) error {
 		return i.fetchAppCachedBuildpackDependency(entry, outputFile)
 	}
 
-	return downloadDependency(entry, outputFile, i.manifest.log)
+	return downloadDependency(entry, outputFile, i.manifest.log, i.retryTimeLimit, i.retryTimeInitialInterval)
 }
 
 func (i *Installer) CleanupAppCache() error {
@@ -236,7 +238,7 @@ func (i *Installer) fetchAppCachedBuildpackDependency(entry *ManifestEntry, outp
 		return deleteBadFile(entry, outputFile)
 	}
 
-	if err := downloadDependency(entry, outputFile, i.manifest.log); err != nil {
+	if err := downloadDependency(entry, outputFile, i.manifest.log, i.retryTimeLimit, i.retryTimeInitialInterval); err != nil {
 		return err
 	}
 	if err := CopyFile(outputFile, cacheFile); err != nil {
@@ -252,4 +254,14 @@ func (i *Installer) SetVersionLine(depName string, line string) {
 
 func (i *Installer) GetVersionLine() *map[string]string {
 	return i.versionLine
+}
+
+func (i *Installer) SetRetryTimeLimit(duration time.Duration) {
+	i.retryTimeLimit = duration
+	return
+}
+
+func (i *Installer) SetRetryTimeInitialInterval(duration time.Duration) {
+	i.retryTimeInitialInterval = duration
+	return
 }
